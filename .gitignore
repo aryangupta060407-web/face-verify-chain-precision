@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Secrets
+.env
+*.key
+*.pem
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Generated files
+output/
+cache/
+*_face_crop.jpg
+
+# macOS
+.DS_Store
+__MACOSX/
