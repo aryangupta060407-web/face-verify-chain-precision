@@ -1,16 +1,6 @@
-"""
-CHECKPOINT 4: Full end-to-end pipeline.
-
-    face scan -> reverse image/social search (with face verification)
-              -> hash + store on-chain -> re-verify
-
-Run:
-    python main.py path/to/photo.jpg
-
-This is the script you record your screen running for the submission.
-"""
-import sys
+"""Backward-compatible face -> web discovery -> blockchain verification CLI."""
 import json
+import sys
 
 from face_id import get_face_encoding
 from web_search import reverse_image_search
@@ -22,46 +12,47 @@ def run_pipeline(image_path: str, tolerance: float = 0.48):
     encoding = get_face_encoding(image_path)
     if encoding is None:
         print("No face detected — aborting.")
-        return
-    print(f"Face encoded ({len(encoding)}-d vector).\n")
+        return None
+    print(f"Face detected and encoded. Dimension: {len(encoding)}")
 
-    print("=== Step 2: Reverse image search with face verification ===")
-    print(f"  Searching Google Lens + Yandex, then verifying each candidate")
-    print(f"  thumbnail against the query face (tolerance={tolerance}; weak candidates are rejected)...\n")
-    match = reverse_image_search(
-        image_path, query_encoding=encoding, tolerance=tolerance
-    )
+    print("\n=== Step 2: Web discovery & face verification ===")
+    print(f"Searching Google Lens exact matches, visual matches, and Yandex (threshold={tolerance})...")
+    match = reverse_image_search(image_path, query_encoding=encoding, tolerance=tolerance)
     if match is None:
-        print("No face-verified matching post found — aborting.")
-        return
-    print(f"\nFound VERIFIED match: {match['title']}")
-    print(f"Source: {match['link']}")
-    print(f"Engine: {match.get('engine', '?')}")
-    print(f"Face verified: {match.get('face_verified', False)}\n")
+        print("No reliable public match found.")
+        return None
 
-    print("=== Step 3: Blockchain upload ===")
-    # Fingerprint the discovered post's metadata (title + link + source).
-    # Swap in the actual image/post bytes if you want to hash raw content instead.
+    print(f"Google Lens exact matches: {match.get('google_exact_matches', 0)}")
+    print(f"Google Lens visual matches: {match.get('google_visual_matches', 0)}")
+    print(f"Yandex matches: {match.get('yandex_matches', 0)}")
+    print(f"Candidates checked: {match.get('candidates_checked', 0)}")
+    print(f"Face-bearing candidates: {match.get('face_bearing_candidates', 0)}")
+    print("\nBest match:")
+    print(f"Title: {match.get('title', '')}")
+    print(f"Source: {match.get('source', '')}")
+    print(f"URL: {match.get('link', '')}")
+    print(f"Engine: {match.get('engine', '')}")
+    print(f"Face similarity: {match.get('face_similarity', 0.0):.4f}")
+    print(f"Image match: {match.get('image_similarity', 0.0):.4f}")
+    print(f"Image SHA-256: {match.get('image_sha256', '')}")
+
+    print("\n=== Step 3: Blockchain upload ===")
     fingerprint_data = json.dumps(match, sort_keys=True).encode("utf-8")
-
     content_hash, tx_hash, status = store_hash(fingerprint_data)
     print(f"Hash: {content_hash.hex()}")
-    print(f"Tx: {tx_hash} (status={status})\n")
+    print(f"Tx: {tx_hash} (status={status})")
 
-    print("=== Step 4: Re-verification ===")
+    print("\n=== Step 4: Re-verification ===")
     result = verify_hash(fingerprint_data)
     print(f"On-chain record: {result}")
-
-    if result["exists"]:
-        print("\n✅ Verified: the discovered post's fingerprint is recorded on-chain.")
-    else:
-        print("\n❌ Verification failed.")
+    verified = bool(result.get("exists"))
+    print("VERIFIED" if verified else "VERIFICATION FAILED")
+    return {"match": match, "chain": result, "verified": verified}
 
 
 if __name__ == "__main__":
     if len(sys.argv) not in (2, 3):
         print("Usage: python main.py <image_path> [tolerance]")
         sys.exit(1)
-
-    tol = float(sys.argv[2]) if len(sys.argv) == 3 else 0.48
-    run_pipeline(sys.argv[1], tolerance=tol)
+    tolerance = float(sys.argv[2]) if len(sys.argv) == 3 else 0.48
+    run_pipeline(sys.argv[1], tolerance=tolerance)

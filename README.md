@@ -4,22 +4,33 @@ Built for HH Goa 2026 Shortlisting — Task 3.
 
 ## What it does
 
-This consent-based demo accepts a face photo, performs genuine Google Lens and Yandex reverse-image searches through SerpApi, downloads candidate thumbnails, detects all faces in each candidate, and accepts a result only when the closest face passes a strict distance threshold. The accepted post metadata is then hashed with SHA-256, stored on a local Ethereum-compatible chain, read back, and independently verified.
+This consent-based demo accepts a face photo, uploads it to a temporary public image host required by the search provider, performs genuine Google Lens exact-match and visual-match searches plus Yandex reverse-image search, downloads full-size candidate images when available, verifies every detected candidate face, ranks the evidence, and anchors the selected post metadata on a local blockchain.
 
 ```text
-face scan → face encoding → live reverse-image search → candidate face verification
-          → strict ranking/rejection → SHA-256 evidence hash → local blockchain → re-verification
+face scan → face embeddings → Lens exact/visual + Yandex discovery
+          → full-image candidate verification → ranked match or no match
+          → SHA-256 evidence hash → Ganache blockchain → independent verification
 ```
 
-The system is designed to prefer **“No face-verified matching post found”** over returning a visually similar stranger. Similarity is not proof of identity, and all test images must be supplied or used with consent.
+The system is designed to prefer **“No reliable public match found”** over presenting a visually similar stranger. Scores are face-similarity signals, not identity certainty, and images must be supplied or used with consent.
 
-## Precision safeguards
+## Face embeddings and precision
 
-The default face distance tolerance is **0.48**, stricter than the common 0.60 default. The input stage selects the largest detected face. Candidate images are checked across all detected faces, ranked by their minimum face distance, and rejected when no candidate passes the threshold. The API and CLI expose the accepted face distance, similarity signal, candidate counts, and rejection message.
+When the optional ArcFace profile is installed, the project uses InsightFace/ONNX Runtime embeddings as its primary face representation. Without that optional profile, it uses the deterministic OpenCV fallback so the base installation remains practical on Windows and offline machines. The OpenCV Haar detector remains available as a fallback detector.
+
+Every detected face in each candidate image is embedded and compared with the query face using cosine similarity. Full-size candidate URLs are preferred over thumbnails. Google Lens `exact_matches` are prioritized; strong Google Lens and Yandex face matches follow; ordinary visual results are ranked last. Exact candidates additionally receive an image-level perceptual-hash signal.
+
+Weak candidates are rejected. The application never returns an unverified first result and prints:
+
+```text
+No reliable public match found.
+```
+
+when no candidate passes the model-appropriate threshold.
 
 ## Blockchain used
 
-The project uses local **Ganache** by default. It stores a SHA-256 fingerprint of the discovered post metadata in the `HashRegistry` Solidity contract and reads it back for verification. Local chain state resets between sessions. No public testnet is required for the demo.
+The project uses local **Ganache** and the `HashRegistry` Solidity contract. It stores a SHA-256 fingerprint of the discovered post metadata, reads it back from the chain, and compares it independently. No public testnet is required. Ganache state resets when the local chain is restarted.
 
 ## Setup
 
@@ -27,11 +38,13 @@ The project uses local **Ganache** by default. It stores a SHA-256 fingerprint o
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-npm install
+# Optional ArcFace quality upgrade:
+# pip install -r requirements-arcface.txt
+npm --prefix frontend install
 cp .env.example .env
 ```
 
-Fill in `SERPAPI_KEY` in `.env`, then start Ganache and deploy the contract:
+Fill in `SERPAPI_KEY` in `.env`. The reverse-image provider requires a public URL, so the pipeline uploads the consented query image to the configured temporary host before searching. Start Ganache and deploy the contract:
 
 ```bash
 ganache
@@ -42,40 +55,42 @@ Copy the printed contract address into `.env` as `CONTRACT_ADDRESS`.
 
 ## Running the pipeline
 
-Checkpoint 1:
+Standalone face check:
 
 ```bash
 python face_id.py path/to/photo.jpg
 ```
 
-Checkpoint 2:
-
-```bash
-python web_search.py path/to/photo.jpg
-```
-
-Full screen-recording path:
+Full backward-compatible CLI:
 
 ```bash
 python main.py path/to/photo.jpg
 ```
 
-An optional stricter threshold can be provided:
+An optional stricter tolerance can be provided as the second argument:
 
 ```bash
 python main.py path/to/photo.jpg 0.45
 ```
 
-The Flask API is available through:
+The Flask API is available with:
 
 ```bash
 python backend/app.py
 ```
 
-The frontend can be started separately from `frontend/` with its package scripts.
+The React frontend can be built with:
 
-## Known limitations
+```bash
+npm --prefix frontend run build
+```
 
-Reverse-image search depends on SerpApi and the search engines’ index. For ordinary private individuals, the actual web image may not be indexed, so the correct result is often no reliable match. The system does not search the entire internet by face and must not be used to identify unknown people without authorization.
+## CLI output
 
-Face distance is a model-dependent visual similarity measure, not a percentage certainty. Lighting, pose, resolution, occlusion, and multiple faces can affect it. SerpApi and image-hosting services require external network access and credentials. The local chain is a reproducible demo ledger, not a public blockchain record.
+The full run reports Google Lens exact-match count, Google Lens visual-match count, Yandex count, candidate images checked, face-bearing candidates, selected title/source/URL/engine, face similarity, image similarity, SHA-256 hash, blockchain transaction, on-chain record, and final `VERIFIED` status.
+
+## Limitations and privacy
+
+This searches publicly indexed web content through SerpApi; it does **not** search the entire internet or private social-media databases. Search-engine recall for ordinary private individuals may be poor, and the correct outcome may be no reliable match. Reverse-image search results can be visually similar rather than the same person, which is why the face-verification and rejection layer is mandatory.
+
+Face similarity is not proof of identity and should not be shown as “100% identity.” Lighting, pose, resolution, occlusion, model availability, and candidate-image quality affect scores. The query image is uploaded to a temporary public image host to enable remote reverse-image search; use only consented images and replace that uploader with an organization-controlled store for production use.

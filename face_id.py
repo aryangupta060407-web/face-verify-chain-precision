@@ -1,4 +1,8 @@
-"""Face detection and normalized visual descriptor utilities."""
+"""Consent-based face detection and embedding utilities.
+
+InsightFace/ArcFace is used when installed and its model is available. The
+OpenCV descriptor remains a deterministic fallback for offline demos.
+"""
 import io
 import os
 import sys
@@ -10,51 +14,81 @@ import requests
 from PIL import Image
 
 DETECTOR = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+_ARCFACE = None
+_ARCFACE_TRIED = False
 
 
-def _faces_and_gray(image: np.ndarray):
+def _arcface_app():
+    global _ARCFACE, _ARCFACE_TRIED
+    if _ARCFACE_TRIED:
+        return _ARCFACE
+    _ARCFACE_TRIED = True
+    try:
+        from insightface.app import FaceAnalysis
+        app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
+        app.prepare(ctx_id=0, det_size=(640, 640))
+        _ARCFACE = app
+    except Exception as exc:
+        print(f"  [info] ArcFace unavailable; using OpenCV fallback ({exc.__class__.__name__})")
+    return _ARCFACE
+
+
+def _load_image(value):
+    if isinstance(value, (bytes, bytearray)):
+        return cv2.imdecode(np.frombuffer(value, np.uint8), cv2.IMREAD_COLOR)
+    return cv2.imread(str(value))
+
+
+def _opencv_faces(image):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    faces = DETECTOR.detectMultiScale(gray, 1.1, 5, minSize=(60, 60))
-    return gray, faces
+    boxes = DETECTOR.detectMultiScale(gray, 1.1, 5, minSize=(60, 60))
+    return gray, boxes
 
 
-def _largest(faces):
-    return max(faces, key=lambda b: int(b[2]) * int(b[3])) if len(faces) else None
-
-
-def _encode(gray: np.ndarray, box) -> np.ndarray:
+def _opencv_embedding(gray, box):
     x, y, w, h = map(int, box)
     crop = cv2.resize(gray[y:y+h, x:x+w], (64, 64), interpolation=cv2.INTER_AREA).astype(np.float32)
     return ((crop - crop.mean()) / (crop.std() + 1e-6)).flatten()
 
 
-def _load_image(path_or_bytes):
-    if isinstance(path_or_bytes, (bytes, bytearray)):
-        image = cv2.imdecode(np.frombuffer(path_or_bytes, np.uint8), cv2.IMREAD_COLOR)
-    else:
-        image = cv2.imread(path_or_bytes)
-    return image
+def get_face_embeddings(value):
+    """Return embeddings and boxes for every face in an image."""
+    image = _load_image(value)
+    if image is None:
+        return []
+
+    app = _arcface_app()
+    if app is not None:
+        try:
+            faces = app.get(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+            return [(np.asarray(face.embedding, dtype=np.float32), tuple(map(int, face.bbox))) for face in faces if face.embedding is not None]
+        except Exception:
+            pass
+
+    gray, boxes = _opencv_faces(image)
+    return [(_opencv_embedding(gray, box), tuple(map(int, box))) for box in boxes]
 
 
 def get_face_encoding(image_path: str):
-    image = _load_image(image_path)
-    if image is None:
+    faces = get_face_embeddings(image_path)
+    if not faces:
         return None
-    gray, faces = _faces_and_gray(image)
-    box = _largest(faces)
-    return _encode(gray, box) if box is not None else None
+    # Use the largest detected face as the query subject.
+    return max(faces, key=lambda item: max(0, item[1][2] - item[1][0]) * max(0, item[1][3] - item[1][1]))[0]
 
 
 def get_face_location(image_path: str):
-    image = _load_image(image_path)
-    if image is None:
+    faces = get_face_embeddings(image_path)
+    if not faces:
         return None
-    _, faces = _faces_and_gray(image)
-    box = _largest(faces)
-    if box is None:
-        return None
-    x, y, w, h = map(int, box)
-    return y, x + w, y + h, x
+    box = max(faces, key=lambda item: max(0, item[1][2] - item[1][0]) * max(0, item[1][3] - item[1][1]))[1]
+    if len(box) == 4 and box[2] > box[0] and box[3] > box[1]:
+        # ArcFace boxes are x1,y1,x2,y2; OpenCV fallback boxes are x,y,w,h.
+        x1, y1, x2, y2 = box
+        if x2 <= x1 or y2 <= y1:
+            x2, y2 = x1 + x2, y1 + y2
+        return y1, x2, y2, x1
+    return None
 
 
 def crop_face(image_path: str, output_path: str = None, margin: float = 0.3):
@@ -64,27 +98,26 @@ def crop_face(image_path: str, output_path: str = None, margin: float = 0.3):
     top, right, bottom, left = location
     img = Image.open(image_path).convert("RGB")
     width, height = img.size
-    face_h, face_w = bottom - top, right - left
-    top = max(0, top - int(face_h * margin)); bottom = min(height, bottom + int(face_h * margin))
-    left = max(0, left - int(face_w * margin)); right = min(width, right + int(face_w * margin))
-    cropped = img.crop((left, top, right, bottom))
+    fh, fw = bottom - top, right - left
+    top = max(0, top - int(fh * margin)); bottom = min(height, bottom + int(fh * margin))
+    left = max(0, left - int(fw * margin)); right = min(width, right + int(fw * margin))
     if output_path is None:
         base, _ = os.path.splitext(image_path)
         output_path = f"{base}_face_crop.jpg"
-    cropped.save(output_path, "JPEG", quality=95)
+    img.crop((left, top, right, bottom)).save(output_path, "JPEG", quality=95)
     return output_path
+
+
+def embeddings_from_bytes(data: bytes):
+    return get_face_embeddings(data)
 
 
 def encoding_from_url(image_url: str):
     try:
-        resp = requests.get(image_url, timeout=10)
+        resp = requests.get(image_url, timeout=15)
         resp.raise_for_status()
-        image = _load_image(resp.content)
-        if image is None:
-            return None
-        gray, faces = _faces_and_gray(image)
-        box = _largest(faces)
-        return _encode(gray, box) if box is not None else None
+        faces = embeddings_from_bytes(resp.content)
+        return faces[0][0] if faces else None
     except Exception:
         return None
 
@@ -92,19 +125,16 @@ def encoding_from_url(image_url: str):
 def find_best_match(original_encoding, candidates, tolerance: float = 0.48):
     ranked = []
     for candidate in candidates:
-        thumb = candidate.get("thumbnail")
+        thumb = candidate.get("image") or candidate.get("thumbnail")
         if not thumb:
             continue
-        candidate_encoding = encoding_from_url(thumb)
-        if candidate_encoding is None:
+        enc = encoding_from_url(thumb)
+        if enc is None:
             continue
-        distance = float(np.linalg.norm(candidate_encoding - original_encoding) / np.sqrt(original_encoding.size))
-        candidate = dict(candidate)
-        candidate["face_distance"] = distance
-        candidate["face_verified"] = distance <= tolerance
-        ranked.append(candidate)
-    accepted = sorted((c for c in ranked if c["face_verified"]), key=lambda c: c["face_distance"])
-    return (accepted[0], accepted[0]["face_distance"]) if accepted else (None, None)
+        distance = float(np.linalg.norm(enc - original_encoding) / np.sqrt(original_encoding.size))
+        if distance <= tolerance:
+            item = dict(candidate); item["face_distance"] = distance; ranked.append(item)
+    return (min(ranked, key=lambda x: x["face_distance"]), min(ranked, key=lambda x: x["face_distance"])["face_distance"]) if ranked else (None, None)
 
 
 if __name__ == "__main__":
@@ -115,5 +145,5 @@ if __name__ == "__main__":
     if encoding is None:
         print("No face detected in the image.")
     else:
-        print(f"Face detected. Descriptor vector length: {len(encoding)}")
+        print(f"Face detected and encoded. Descriptor dimension: {len(encoding)}")
         print(f"Cropped face saved to: {crop_face(sys.argv[1])}")
