@@ -165,6 +165,10 @@ def reverse_image_search(image_path: str, query_encoding=None, max_candidates: i
         ranked.append(candidate)
 
     ranked.sort(key=lambda x: x["ranking"], reverse=True)
+    if ranked:
+        print("Top candidate face scores:")
+        for item in ranked[:5]:
+            print(f"  {item.get('face_similarity', 0.0):.4f} face / {item.get('image_similarity', 0.0):.4f} image | {item.get('engine')} | {item.get('link', '')[:100]}")
     accepted = [x for x in ranked if x["reliable_match"]]
     if not accepted:
         print(f"Candidates checked: {checked}; face-bearing: {face_bearing}; downloads failed: {download_failed}; rejected by face threshold: {rejected}")
