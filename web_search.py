@@ -127,14 +127,21 @@ def reverse_image_search(image_path: str, query_encoding=None, max_candidates: i
             seen.add(key)
             all_candidates.append(c)
 
+    print(f"Google Lens exact matches: {len(exact)}")
+    print(f"Google Lens visual matches: {len(visual)}")
+    print(f"Yandex matches: {len(yandex)}")
+    print(f"Unique candidates discovered: {len(all_candidates)}")
     query_data = open(image_path, "rb").read()
     query_hash = _phash(query_data)
     ranked = []
     checked = 0
     face_bearing = 0
+    download_failed = 0
+    rejected = 0
     for candidate in all_candidates[:max_candidates]:
         data = _download(candidate.get("image")) or _download(candidate.get("thumbnail"))
         if data is None:
+            download_failed += 1
             continue
         checked += 1
         metrics = _face_metrics(query_encoding, data)
@@ -150,6 +157,8 @@ def reverse_image_search(image_path: str, query_encoding=None, max_candidates: i
         candidate["image_sha256"] = hashlib.sha256(data).hexdigest()
         candidate["face_verified"] = face_similarity >= threshold
         candidate["reliable_match"] = candidate["face_verified"]
+        if not candidate["reliable_match"]:
+            rejected += 1
         # Exact results and strong face similarity dominate ordinary visuals.
         source_priority = 3 if candidate["exact_matches"] else (2 if candidate["engine"] == "Google Lens" else 1)
         candidate["ranking"] = (source_priority, face_similarity, image_match)
@@ -158,6 +167,7 @@ def reverse_image_search(image_path: str, query_encoding=None, max_candidates: i
     ranked.sort(key=lambda x: x["ranking"], reverse=True)
     accepted = [x for x in ranked if x["reliable_match"]]
     if not accepted:
+        print(f"Candidates checked: {checked}; face-bearing: {face_bearing}; downloads failed: {download_failed}; rejected by face threshold: {rejected}")
         print("No reliable public match found.")
         return None
 
