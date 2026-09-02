@@ -104,7 +104,7 @@ def _face_metrics(query_encoding, data):
     return best
 
 
-def reverse_image_search(image_path: str, query_encoding=None, max_candidates: int = 20, tolerance: float = 0.48):
+def reverse_image_search(image_path: str, query_encoding=None, max_candidates: int = 100, tolerance: float = 0.48):
     """Search exact, visual, and Yandex results, then rank verified candidates."""
     if not SERPAPI_KEY:
         raise RuntimeError("SERPAPI_KEY not set. Copy .env.example to .env and fill it in.")
