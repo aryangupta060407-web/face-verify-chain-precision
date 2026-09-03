@@ -32,7 +32,7 @@ when no candidate passes the model-appropriate threshold.
 
 The optional OpenAI discovery layer uses the Responses API `web_search` tool with the consented input image. It extracts only URLs actually cited by the response, reads public-page image metadata when available, and sends those candidate images through the existing local ArcFace verifier. The model is not permitted to identify a person or override biometric verification. The `ai_evidence.py` module then summarizes already-retrieved metadata; without `OPENAI_API_KEY`, the deterministic local summary is used.
 
-The optional `FACE_SEARCH_PROVIDER_URL` and `FACE_SEARCH_API_KEY` settings support an authorized official face-search provider that returns a JSON `results`, `matches`, or `images` array. This is an adapter contract, not a built-in PimEyes/FaceCheck integration; no provider is hardcoded and no private service is scraped. Provider candidates still go through local face verification before they can be accepted.
+The optional `FACE_SEARCH_PROVIDER_URL` and `FACE_SEARCH_API_KEY` settings support an authorized official face-search provider that returns a JSON `results`, `matches`, or `images` array. This is an adapter contract, not a built-in PimEyes/FaceCheck integration; no provider is hardcoded and no private service is scraped. Provider candidates still go through local face verification before they can be accepted. When AI context extraction is unavailable, the deterministic fallback uses non-biometric clues already present in the submitted file, such as a meaningful filename stem or readable EXIF title/author fields, to form targeted public searches for X, Instagram, and LinkedIn. Generic camera filenames are ignored.
 
 ## Blockchain used
 

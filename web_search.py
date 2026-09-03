@@ -2,6 +2,7 @@
 import hashlib
 import io
 import os
+import re
 import requests
 from PIL import Image
 from bs4 import BeautifulSoup
@@ -96,6 +97,26 @@ def _dedicated_provider(image_path: str):
     except (requests.RequestException, ValueError) as exc:
         print(f"  [warn] Dedicated provider failed: {exc}")
         return []
+
+
+def _local_context_clues(image_path: str) -> list[str]:
+    """Extract non-biometric clues already present in the submitted photo file."""
+    clues = []
+    stem = os.path.splitext(os.path.basename(image_path))[0]
+    stem = re.sub(r"[_-]+", " ", stem).strip()
+    if stem and not re.fullmatch(r"(?:img|image|photo|dsc|pxl)?\s*\d+", stem, re.I):
+        clues.append(stem)
+    try:
+        with Image.open(image_path) as image:
+            exif = image.getexif()
+            for tag_id, value in exif.items():
+                if tag_id in (270, 315, 40092, 40093, 40094, 40095):
+                    text = str(value).strip()
+                    if 2 <= len(text) <= 120 and text not in clues:
+                        clues.append(text)
+    except (OSError, ValueError):
+        pass
+    return clues[:8]
 
 
 def _google_context_search(clues: list[str], max_per_query: int = 10):
@@ -241,6 +262,9 @@ def reverse_image_search(image_path: str, query_encoding=None, max_candidates: i
         raise RuntimeError("Configure SERPAPI_KEY, OPENAI_API_KEY, or both FACE_SEARCH_PROVIDER_URL and FACE_SEARCH_API_KEY in .env.")
 
     context_clues = extract_context(image_path)
+    for clue in _local_context_clues(image_path):
+        if clue not in context_clues:
+            context_clues.append(clue)
     openai_candidates = openai_web_discover(image_path)
     provider = _dedicated_provider(image_path)
     context_candidates = []
