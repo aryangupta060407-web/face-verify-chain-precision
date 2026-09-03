@@ -212,7 +212,7 @@ def _image_similarity(query_hash, candidate_hash):
     return 1.0 - distance / 1024.0
 
 
-def _face_metrics(query_encoding, data):
+def _face_metrics(query_encoding, data, tolerance=0.48):
     faces = embeddings_from_bytes(data)
     if not faces:
         return None
@@ -225,7 +225,9 @@ def _face_metrics(query_encoding, data):
         cosine = float(np.dot(q, e) / (q_norm * (np.linalg.norm(e) or 1.0)))
         # ArcFace uses cosine similarity; the OpenCV fallback is deliberately
         # held to a stricter cosine threshold because it is not identity-grade.
-        threshold = 0.45 if q.size >= 256 else 0.93
+        # Respect the caller's strict ArcFace threshold; the fallback metric
+        # remains deliberately conservative because it is not identity-grade.
+        threshold = 0.48 if q.size >= 256 else 0.93
         if best is None or cosine > best["face_similarity"]:
             best = {"face_similarity": cosine, "faces_detected": len(faces), "face_threshold": threshold}
     return best
@@ -289,7 +291,7 @@ def reverse_image_search(image_path: str, query_encoding=None, max_candidates: i
             download_failed += 1
             continue
         checked += 1
-        metrics = _face_metrics(query_encoding, data)
+        metrics = _face_metrics(query_encoding, data, tolerance=tolerance)
         if metrics is None:
             continue
         face_bearing += 1
@@ -300,13 +302,15 @@ def reverse_image_search(image_path: str, query_encoding=None, max_candidates: i
         candidate.update(metrics)
         candidate["image_similarity"] = image_match
         candidate["image_sha256"] = hashlib.sha256(data).hexdigest()
-        candidate["face_verified"] = face_similarity >= threshold
+        candidate["face_verified"] = face_similarity >= max(threshold, tolerance)
         candidate["reliable_match"] = candidate["face_verified"]
         if not candidate["reliable_match"]:
             rejected += 1
-        # Exact results and strong face similarity dominate ordinary visuals.
+        # Face similarity is authoritative. Source/platform priority only
+        # breaks ties and must never make a weaker lookalike outrank a stronger
+        # biometric match from another public source.
         source_priority = 5 if candidate["engine"] == "OpenAI web search" else (4 if candidate["engine"].startswith("Google Search") else (4 if candidate["engine"] == "Dedicated provider" else (3 if candidate["exact_matches"] else (2 if candidate["engine"] == "Google Lens" else 1))))
-        candidate["ranking"] = (source_priority, face_similarity, image_match)
+        candidate["ranking"] = (face_similarity, source_priority, image_match)
         ranked.append(candidate)
 
     ranked.sort(key=lambda x: x["ranking"], reverse=True)
