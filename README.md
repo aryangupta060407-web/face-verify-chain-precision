@@ -18,7 +18,7 @@ The system is designed to prefer **“No reliable public match found”** over p
 
 When the optional ArcFace profile is installed, the project uses InsightFace/ONNX Runtime embeddings as its primary face representation. Without that optional profile, it uses the deterministic OpenCV fallback so the base installation remains practical on Windows and offline machines. The OpenCV Haar detector remains available as a fallback detector.
 
-Every detected face in each candidate image is embedded and compared with the query face using cosine similarity. Full-size candidate URLs are preferred over thumbnails. Google Lens `exact_matches` are prioritized; strong Google Lens and Yandex face matches follow; ordinary visual results are ranked last. Exact candidates additionally receive an image-level perceptual-hash signal.
+Every detected face in each candidate image is embedded and compared with the query face using cosine similarity. Full-size candidate URLs are preferred over thumbnails, and public X, Twitter, Instagram, and LinkedIn page candidates are checked before other domains when returned by the providers. Google Lens `exact_matches` are prioritized; strong Google Lens and Yandex face matches follow; ordinary visual results are ranked last. Exact candidates additionally receive an image-level perceptual-hash signal. Missing preview images can be recovered from public page metadata such as `og:image` or `twitter:image`.
 
 Weak candidates are rejected. The application never returns an unverified first result and prints:
 

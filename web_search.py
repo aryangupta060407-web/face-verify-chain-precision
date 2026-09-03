@@ -38,13 +38,25 @@ def _serpapi(params):
     return GoogleSearch(params).get_dict()
 
 
+def _url_value(value):
+    """Convert provider image/link fields, including nested objects, into a URL string."""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        for key in ("url", "link", "image", "original", "image_url", "thumbnail", "src"):
+            result = _url_value(value.get(key))
+            if result:
+                return result
+    return ""
+
+
 def _normalise(item, engine, exact=False):
     return {
-        "title": item.get("title", ""),
-        "source": item.get("source", item.get("domain", "")),
-        "link": item.get("link", item.get("url", "")),
-        "thumbnail": item.get("thumbnail", ""),
-        "image": item.get("image", item.get("original", item.get("image_url", ""))),
+        "title": str(item.get("title", "") or ""),
+        "source": str(item.get("source", item.get("domain", "")) or ""),
+        "link": _url_value(item.get("link", item.get("url", ""))),
+        "thumbnail": _url_value(item.get("thumbnail", "")),
+        "image": _url_value(item.get("image", item.get("original", item.get("image_url", "")))),
         "engine": engine,
         "exact_matches": bool(exact),
     }
@@ -103,6 +115,15 @@ def _yandex(image_url):
     response = _serpapi({"engine": "yandex_images", "url": image_url})
     raw = response.get("image_results") or response.get("inline_images") or response.get("results") or []
     return [_normalise(x, "Yandex", False) for x in raw]
+
+
+def _priority_platform(candidate):
+    """Prefer public social-platform pages during candidate verification."""
+    text = f"{candidate.get('link', '')} {candidate.get('source', '')}".lower()
+    for domain in ("x.com", "twitter.com", "instagram.com", "linkedin.com"):
+        if domain in text:
+            return 0
+    return 1
 
 
 def _page_image(page_url):
@@ -250,6 +271,10 @@ def reverse_image_search(image_path: str, query_encoding=None, max_candidates: i
     print(f"Google Lens exact matches: {len(exact)}")
     print(f"Google Lens visual matches: {len(visual)}")
     print(f"Yandex matches: {len(yandex)}")
+    # Search providers return mixed results. Check public social-platform pages
+    # first, while retaining exact-match priority within each group.
+    all_candidates.sort(key=lambda c: (_priority_platform(c), 0 if c.get("exact_matches") else 1))
+    print(f"Priority social candidates: {sum(_priority_platform(c) == 0 for c in all_candidates)}")
     print(f"Unique candidates discovered: {len(all_candidates)}")
     query_data = open(image_path, "rb").read()
     query_hash = _phash(query_data)

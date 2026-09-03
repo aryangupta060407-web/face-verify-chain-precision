@@ -6,6 +6,7 @@ OpenCV descriptor remains a deterministic fallback for offline demos.
 import io
 import os
 import sys
+import warnings
 from typing import Optional
 
 import cv2
@@ -25,6 +26,12 @@ def _arcface_app():
     _ARCFACE_TRIED = True
     try:
         from insightface.app import FaceAnalysis
+        warnings.filterwarnings(
+            "ignore",
+            message=r".*estimate.*deprecated.*",
+            category=FutureWarning,
+            module=r"insightface\..*",
+        )
         app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
         app.prepare(ctx_id=0, det_size=(640, 640))
         _ARCFACE = app
