@@ -4,7 +4,9 @@ import io
 import os
 import requests
 from PIL import Image
+from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+from urllib.parse import urljoin
 
 from face_id import embeddings_from_bytes
 from openai_discovery import discover as openai_web_discover, extract_context
@@ -103,15 +105,72 @@ def _yandex(image_url):
     return [_normalise(x, "Yandex", False) for x in raw]
 
 
-def _download(url):
+def _page_image(page_url):
+    """Resolve a public page to its declared preview image when search metadata lacks one."""
+    if not page_url:
+        return None
+    try:
+        r = requests.get(
+            page_url,
+            timeout=15,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; FaceVerifyChain/1.0)"},
+        )
+        r.raise_for_status()
+        content_type = (r.headers.get("content-type") or "").lower()
+        if content_type.startswith("image/"):
+            return page_url
+        soup = BeautifulSoup(r.text, "html.parser")
+        for attrs in (
+            {"property": "og:image"},
+            {"name": "twitter:image"},
+            {"property": "twitter:image"},
+        ):
+            tag = soup.find("meta", attrs=attrs)
+            value = tag.get("content", "") if tag else ""
+            if value.startswith(("http://", "https://")):
+                return value
+            if value.startswith("/"):
+                return urljoin(page_url, value)
+    except (requests.RequestException, ValueError):
+        return None
+    return None
+
+
+def _download(url, referer=None):
     if not url:
         return None
     try:
-        r = requests.get(url, timeout=20, headers={"User-Agent": "FaceVerifyChain/1.0"})
+        headers = {
+            "User-Agent": "Mozilla/5.0 (compatible; FaceVerifyChain/1.0)",
+            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        }
+        if referer:
+            headers["Referer"] = referer
+        r = requests.get(url, timeout=25, headers=headers)
         r.raise_for_status()
+        if not r.content:
+            return None
         return r.content
     except requests.RequestException:
         return None
+
+
+def _candidate_image(candidate):
+    """Try direct image fields first, then recover social-page preview metadata."""
+    page_url = candidate.get("link") or ""
+    urls = [candidate.get("image"), candidate.get("thumbnail")]
+    seen = set()
+    for url in urls:
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        data = _download(url, referer=page_url)
+        if data is not None:
+            return data
+    page_image = _page_image(page_url)
+    if page_image and page_image not in seen:
+        return _download(page_image, referer=page_url)
+    return None
 
 
 def _phash(data):
@@ -200,7 +259,7 @@ def reverse_image_search(image_path: str, query_encoding=None, max_candidates: i
     download_failed = 0
     rejected = 0
     for candidate in all_candidates[:max_candidates]:
-        data = _download(candidate.get("image")) or _download(candidate.get("thumbnail"))
+        data = _candidate_image(candidate)
         if data is None:
             download_failed += 1
             continue
