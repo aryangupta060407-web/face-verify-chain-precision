@@ -4,13 +4,14 @@ import io
 import os
 import requests
 from PIL import Image
-from serpapi import GoogleSearch
 from dotenv import load_dotenv
 
 from face_id import embeddings_from_bytes
 
 load_dotenv()
 SERPAPI_KEY = os.getenv("SERPAPI_KEY")
+FACE_SEARCH_PROVIDER_URL = os.getenv("FACE_SEARCH_PROVIDER_URL")
+FACE_SEARCH_API_KEY = os.getenv("FACE_SEARCH_API_KEY")
 
 
 def upload_temp_image(image_path: str) -> str:
@@ -25,6 +26,10 @@ def upload_temp_image(image_path: str) -> str:
 
 
 def _serpapi(params):
+    try:
+        from serpapi import GoogleSearch
+    except ImportError as exc:
+        raise RuntimeError("Install google-search-results to use SerpApi search.") from exc
     params = dict(params)
     params["api_key"] = SERPAPI_KEY
     return GoogleSearch(params).get_dict()
@@ -48,6 +53,34 @@ def _google_lens(image_url):
     exact = [_normalise(x, "Google Lens", True) for x in (exact_response.get("exact_matches") or [])]
     visual = [_normalise(x, "Google Lens", False) for x in (visual_response.get("visual_matches") or [])]
     return exact, visual
+
+
+def _dedicated_provider(image_path: str):
+    """Call an official configured provider; never scrape or guess a provider API."""
+    if not FACE_SEARCH_PROVIDER_URL or not FACE_SEARCH_API_KEY:
+        return []
+    try:
+        with open(image_path, "rb") as image_file:
+            response = requests.post(
+                FACE_SEARCH_PROVIDER_URL,
+                headers={"Authorization": f"Bearer {FACE_SEARCH_API_KEY}"},
+                files={"image": (os.path.basename(image_path), image_file, "application/octet-stream")},
+                timeout=60,
+            )
+        response.raise_for_status()
+        payload = response.json()
+        raw = payload.get("results") or payload.get("matches") or payload.get("images") or []
+        results = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            result = _normalise(item, "Dedicated provider", False)
+            result["provider_score"] = item.get("score", item.get("similarity"))
+            results.append(result)
+        return results
+    except (requests.RequestException, ValueError) as exc:
+        print(f"  [warn] Dedicated provider failed: {exc}")
+        return []
 
 
 def _yandex(image_url):
@@ -106,27 +139,30 @@ def _face_metrics(query_encoding, data):
 
 def reverse_image_search(image_path: str, query_encoding=None, max_candidates: int = 100, tolerance: float = 0.48):
     """Search exact, visual, and Yandex results, then rank verified candidates."""
-    if not SERPAPI_KEY:
-        raise RuntimeError("SERPAPI_KEY not set. Copy .env.example to .env and fill it in.")
     if query_encoding is None:
         raise ValueError("Face verification is required; unverified visual results are never returned.")
+    if not SERPAPI_KEY and not (FACE_SEARCH_PROVIDER_URL and FACE_SEARCH_API_KEY):
+        raise RuntimeError("Configure SERPAPI_KEY or both FACE_SEARCH_PROVIDER_URL and FACE_SEARCH_API_KEY in .env.")
 
-    image_url = upload_temp_image(image_path)
-    exact, visual = _google_lens(image_url)
-    try:
-        yandex = _yandex(image_url)
-    except Exception as exc:
-        print(f"  [warn] Yandex search failed: {exc}")
-        yandex = []
+    provider = _dedicated_provider(image_path)
+    exact, visual, yandex = [], [], []
+    if SERPAPI_KEY:
+        image_url = upload_temp_image(image_path)
+        exact, visual = _google_lens(image_url)
+        try:
+            yandex = _yandex(image_url)
+        except Exception as exc:
+            print(f"  [warn] Yandex search failed: {exc}")
 
     all_candidates = []
     seen = set()
-    for c in exact + visual + yandex:
+    for c in provider + exact + visual + yandex:
         key = c.get("link") or c.get("image") or c.get("thumbnail")
         if key and key not in seen:
             seen.add(key)
             all_candidates.append(c)
 
+    print(f"Dedicated provider matches: {len(provider)}")
     print(f"Google Lens exact matches: {len(exact)}")
     print(f"Google Lens visual matches: {len(visual)}")
     print(f"Yandex matches: {len(yandex)}")
@@ -160,7 +196,7 @@ def reverse_image_search(image_path: str, query_encoding=None, max_candidates: i
         if not candidate["reliable_match"]:
             rejected += 1
         # Exact results and strong face similarity dominate ordinary visuals.
-        source_priority = 3 if candidate["exact_matches"] else (2 if candidate["engine"] == "Google Lens" else 1)
+        source_priority = 4 if candidate["engine"] == "Dedicated provider" else (3 if candidate["exact_matches"] else (2 if candidate["engine"] == "Google Lens" else 1))
         candidate["ranking"] = (source_priority, face_similarity, image_match)
         ranked.append(candidate)
 
@@ -177,12 +213,14 @@ def reverse_image_search(image_path: str, query_encoding=None, max_candidates: i
 
     best = accepted[0]
     best.update({
+        "dedicated_provider_matches": len(provider),
         "google_exact_matches": len(exact),
         "google_visual_matches": len(visual),
         "yandex_matches": len(yandex),
         "candidates_checked": checked,
         "face_bearing_candidates": face_bearing,
         "image_sha256": best.get("image_sha256"),
+        "ranked_candidates": ranked[:10],
     })
     print(f"  Best match ranked: {best.get('title', '?')[:80]}")
     return best

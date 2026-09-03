@@ -5,6 +5,7 @@ import sys
 from face_id import get_face_encoding
 from web_search import reverse_image_search
 from blockchain import store_hash, verify_hash
+from ai_evidence import explain_evidence
 
 
 def run_pipeline(image_path: str, tolerance: float = 0.48):
@@ -35,9 +36,14 @@ def run_pipeline(image_path: str, tolerance: float = 0.48):
     print(f"Face similarity: {match.get('face_similarity', 0.0):.4f}")
     print(f"Image match: {match.get('image_similarity', 0.0):.4f}")
     print(f"Image SHA-256: {match.get('image_sha256', '')}")
+    evidence = explain_evidence(match.get("ranked_candidates", [match]))
+    print(f"AI evidence layer: {'configured model' if evidence.get('model_used') else 'deterministic/local'}")
+    print(f"Evidence summary: {evidence.get('summary', '')}")
 
     print("\n=== Step 3: Blockchain upload ===")
-    fingerprint_data = json.dumps(match, sort_keys=True).encode("utf-8")
+    record = dict(match)
+    record["ai_evidence"] = evidence
+    fingerprint_data = json.dumps(record, sort_keys=True).encode("utf-8")
     content_hash, tx_hash, status = store_hash(fingerprint_data)
     print(f"Hash: {content_hash.hex()}")
     print(f"Tx: {tx_hash} (status={status})")
@@ -47,7 +53,7 @@ def run_pipeline(image_path: str, tolerance: float = 0.48):
     print(f"On-chain record: {result}")
     verified = bool(result.get("exists"))
     print("VERIFIED" if verified else "VERIFICATION FAILED")
-    return {"match": match, "chain": result, "verified": verified}
+    return {"match": match, "evidence": evidence, "chain": result, "verified": verified}
 
 
 if __name__ == "__main__":
