@@ -11,3 +11,4 @@ flask-cors==4.0.1
 
 # Optional AI evidence normalization; omit if OPENAI_API_KEY is not configured
 openai>=1.60.0
+beautifulsoup4>=4.12.3

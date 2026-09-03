@@ -7,6 +7,7 @@ from PIL import Image
 from dotenv import load_dotenv
 
 from face_id import embeddings_from_bytes
+from openai_discovery import discover as openai_web_discover
 
 load_dotenv()
 SERPAPI_KEY = os.getenv("SERPAPI_KEY")
@@ -141,9 +142,10 @@ def reverse_image_search(image_path: str, query_encoding=None, max_candidates: i
     """Search exact, visual, and Yandex results, then rank verified candidates."""
     if query_encoding is None:
         raise ValueError("Face verification is required; unverified visual results are never returned.")
-    if not SERPAPI_KEY and not (FACE_SEARCH_PROVIDER_URL and FACE_SEARCH_API_KEY):
-        raise RuntimeError("Configure SERPAPI_KEY or both FACE_SEARCH_PROVIDER_URL and FACE_SEARCH_API_KEY in .env.")
+    if not SERPAPI_KEY and not (FACE_SEARCH_PROVIDER_URL and FACE_SEARCH_API_KEY) and not os.getenv("OPENAI_API_KEY"):
+        raise RuntimeError("Configure SERPAPI_KEY, OPENAI_API_KEY, or both FACE_SEARCH_PROVIDER_URL and FACE_SEARCH_API_KEY in .env.")
 
+    openai_candidates = openai_web_discover(image_path)
     provider = _dedicated_provider(image_path)
     exact, visual, yandex = [], [], []
     if SERPAPI_KEY:
@@ -156,12 +158,13 @@ def reverse_image_search(image_path: str, query_encoding=None, max_candidates: i
 
     all_candidates = []
     seen = set()
-    for c in provider + exact + visual + yandex:
+    for c in openai_candidates + provider + exact + visual + yandex:
         key = c.get("link") or c.get("image") or c.get("thumbnail")
         if key and key not in seen:
             seen.add(key)
             all_candidates.append(c)
 
+    print(f"OpenAI web-search candidates: {len(openai_candidates)}")
     print(f"Dedicated provider matches: {len(provider)}")
     print(f"Google Lens exact matches: {len(exact)}")
     print(f"Google Lens visual matches: {len(visual)}")
@@ -196,7 +199,7 @@ def reverse_image_search(image_path: str, query_encoding=None, max_candidates: i
         if not candidate["reliable_match"]:
             rejected += 1
         # Exact results and strong face similarity dominate ordinary visuals.
-        source_priority = 4 if candidate["engine"] == "Dedicated provider" else (3 if candidate["exact_matches"] else (2 if candidate["engine"] == "Google Lens" else 1))
+        source_priority = 5 if candidate["engine"] == "OpenAI web search" else (4 if candidate["engine"] == "Dedicated provider" else (3 if candidate["exact_matches"] else (2 if candidate["engine"] == "Google Lens" else 1)))
         candidate["ranking"] = (source_priority, face_similarity, image_match)
         ranked.append(candidate)
 
@@ -213,6 +216,7 @@ def reverse_image_search(image_path: str, query_encoding=None, max_candidates: i
 
     best = accepted[0]
     best.update({
+        "openai_web_search_candidates": len(openai_candidates),
         "dedicated_provider_matches": len(provider),
         "google_exact_matches": len(exact),
         "google_visual_matches": len(visual),

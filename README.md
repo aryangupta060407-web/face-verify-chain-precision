@@ -30,7 +30,7 @@ when no candidate passes the model-appropriate threshold.
 
 ## Optional AI evidence layer
 
-The optional `ai_evidence.py` module normalizes already-retrieved candidate metadata and can call an OpenAI-compatible model to summarize whether the URL, title, platform, and image metadata are internally consistent. It receives metadata only and cannot override the local ArcFace decision. Without `OPENAI_API_KEY`, it uses a deterministic local summary, so the base pipeline remains runnable without an AI API key.
+The optional OpenAI discovery layer uses the Responses API `web_search` tool with the consented input image. It extracts only URLs actually cited by the response, reads public-page image metadata when available, and sends those candidate images through the existing local ArcFace verifier. The model is not permitted to identify a person or override biometric verification. The `ai_evidence.py` module then summarizes already-retrieved metadata; without `OPENAI_API_KEY`, the deterministic local summary is used.
 
 The optional `FACE_SEARCH_PROVIDER_URL` and `FACE_SEARCH_API_KEY` settings support an authorized official face-search provider that returns a JSON `results`, `matches`, or `images` array. This is an adapter contract, not a built-in PimEyes/FaceCheck integration; no provider is hardcoded and no private service is scraped. Provider candidates still go through local face verification before they can be accepted.
 
@@ -50,7 +50,7 @@ npm --prefix frontend install
 cp .env.example .env
 ```
 
-Fill in `SERPAPI_KEY` in `.env` for Google Lens/Yandex search. Alternatively, configure both `FACE_SEARCH_PROVIDER_URL` and `FACE_SEARCH_API_KEY` for an authorized provider. If `OPENAI_API_KEY` is configured, the optional evidence summary uses `OPENAI_EVIDENCE_MODEL` (default `gpt-5-mini`); otherwise it uses the deterministic local summary. The SerpApi reverse-image path requires a public URL, so it uploads the consented query image to the configured temporary host before searching. Start Ganache and deploy the contract:
+Fill in `SERPAPI_KEY` in `.env` for Google Lens/Yandex search. Alternatively, configure `OPENAI_API_KEY` to enable Responses API web-search discovery, or configure both `FACE_SEARCH_PROVIDER_URL` and `FACE_SEARCH_API_KEY` for an authorized provider. `OPENAI_WEB_SEARCH_MODEL` defaults to `gpt-5.5`; `OPENAI_EVIDENCE_MODEL` defaults to `gpt-5-mini`. The SerpApi reverse-image path requires a public URL, so it uploads the consented query image to the configured temporary host before searching. OpenAI discovery uses the image as an input and keeps only web-cited public URLs. Start Ganache and deploy the contract:
 
 ```bash
 ganache
@@ -93,7 +93,7 @@ npm --prefix frontend run build
 
 ## CLI output
 
-The full run reports dedicated-provider count, Google Lens exact-match count, Google Lens visual-match count, Yandex count, candidate images checked, face-bearing candidates, selected title/source/URL/engine, face similarity, image similarity, SHA-256 hash, optional evidence summary, blockchain transaction, on-chain record, and final `VERIFIED` status.
+The full run reports OpenAI web-search candidate count, dedicated-provider count, Google Lens exact-match count, Google Lens visual-match count, Yandex count, candidate images checked, face-bearing candidates, selected title/source/URL/engine, face similarity, image similarity, SHA-256 hash, optional evidence summary, blockchain transaction, on-chain record, and final `VERIFIED` status.
 
 ## Limitations and privacy
 
