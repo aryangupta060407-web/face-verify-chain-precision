@@ -65,6 +65,44 @@ def _page_image(url: str) -> str:
     return ""
 
 
+def extract_context(image_path: str) -> list[str]:
+    """Extract visible text/context only; never infer identity from facial appearance."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return []
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key)
+        response = client.responses.create(
+            model=os.getenv("OPENAI_VISION_MODEL", "gpt-5.5"),
+            input=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": (
+                            "Read this image for search clues only. Extract visible text such as usernames, "
+                            "company names, college names, event names, logos, or website names. Do not identify "
+                            "the person from facial appearance and do not guess a name. Return a JSON array of "
+                            "short clue strings and nothing else. Return [] if no clue is visible."
+                        ),
+                    },
+                    {"type": "input_image", "image_url": _image_data_url(image_path)},
+                ],
+            }],
+        )
+        text = getattr(response, "output_text", "") or "[]"
+        match = re.search(r"\[[\s\S]*\]", text)
+        if not match:
+            return []
+        import json
+        values = json.loads(match.group(0))
+        return [str(value).strip() for value in values if str(value).strip()][:8]
+    except Exception as exc:
+        print(f"  [warn] OpenAI context extraction failed: {exc}")
+        return []
+
+
 def discover(image_path: str, max_results: int = 20) -> list[dict[str, Any]]:
     """Discover cited public pages; return normalized candidates for ArcFace."""
     api_key = os.getenv("OPENAI_API_KEY")

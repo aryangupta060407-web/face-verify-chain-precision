@@ -7,7 +7,7 @@ from PIL import Image
 from dotenv import load_dotenv
 
 from face_id import embeddings_from_bytes
-from openai_discovery import discover as openai_web_discover
+from openai_discovery import discover as openai_web_discover, extract_context
 
 load_dotenv()
 SERPAPI_KEY = os.getenv("SERPAPI_KEY")
@@ -84,6 +84,19 @@ def _dedicated_provider(image_path: str):
         return []
 
 
+def _google_context_search(clues: list[str], max_per_query: int = 10):
+    results = []
+    for clue in clues[:5]:
+        safe_clue = " ".join(str(clue).split())[:120]
+        for site in ("x.com", "instagram.com", "linkedin.com"):
+            response = _serpapi({"engine": "google", "q": f'site:{site} "{safe_clue}"', "num": max_per_query})
+            for item in response.get("organic_results") or []:
+                candidate = _normalise(item, f"Google Search ({site})", False)
+                candidate["context_clue"] = safe_clue
+                results.append(candidate)
+    return results
+
+
 def _yandex(image_url):
     response = _serpapi({"engine": "yandex_images", "url": image_url})
     raw = response.get("image_results") or response.get("inline_images") or response.get("results") or []
@@ -145,10 +158,17 @@ def reverse_image_search(image_path: str, query_encoding=None, max_candidates: i
     if not SERPAPI_KEY and not (FACE_SEARCH_PROVIDER_URL and FACE_SEARCH_API_KEY) and not os.getenv("OPENAI_API_KEY"):
         raise RuntimeError("Configure SERPAPI_KEY, OPENAI_API_KEY, or both FACE_SEARCH_PROVIDER_URL and FACE_SEARCH_API_KEY in .env.")
 
+    context_clues = extract_context(image_path)
     openai_candidates = openai_web_discover(image_path)
     provider = _dedicated_provider(image_path)
+    context_candidates = []
     exact, visual, yandex = [], [], []
     if SERPAPI_KEY:
+        if context_clues:
+            try:
+                context_candidates = _google_context_search(context_clues)
+            except Exception as exc:
+                print(f"  [warn] Context Google search failed: {exc}")
         image_url = upload_temp_image(image_path)
         exact, visual = _google_lens(image_url)
         try:
@@ -158,12 +178,14 @@ def reverse_image_search(image_path: str, query_encoding=None, max_candidates: i
 
     all_candidates = []
     seen = set()
-    for c in openai_candidates + provider + exact + visual + yandex:
+    for c in openai_candidates + context_candidates + provider + exact + visual + yandex:
         key = c.get("link") or c.get("image") or c.get("thumbnail")
         if key and key not in seen:
             seen.add(key)
             all_candidates.append(c)
 
+    print(f"Context clues extracted: {len(context_clues)}")
+    print(f"Targeted Google candidates: {len(context_candidates)}")
     print(f"OpenAI web-search candidates: {len(openai_candidates)}")
     print(f"Dedicated provider matches: {len(provider)}")
     print(f"Google Lens exact matches: {len(exact)}")
@@ -199,7 +221,7 @@ def reverse_image_search(image_path: str, query_encoding=None, max_candidates: i
         if not candidate["reliable_match"]:
             rejected += 1
         # Exact results and strong face similarity dominate ordinary visuals.
-        source_priority = 5 if candidate["engine"] == "OpenAI web search" else (4 if candidate["engine"] == "Dedicated provider" else (3 if candidate["exact_matches"] else (2 if candidate["engine"] == "Google Lens" else 1)))
+        source_priority = 5 if candidate["engine"] == "OpenAI web search" else (4 if candidate["engine"].startswith("Google Search") else (4 if candidate["engine"] == "Dedicated provider" else (3 if candidate["exact_matches"] else (2 if candidate["engine"] == "Google Lens" else 1))))
         candidate["ranking"] = (source_priority, face_similarity, image_match)
         ranked.append(candidate)
 
@@ -216,6 +238,8 @@ def reverse_image_search(image_path: str, query_encoding=None, max_candidates: i
 
     best = accepted[0]
     best.update({
+        "context_clues": context_clues,
+        "targeted_google_candidates": len(context_candidates),
         "openai_web_search_candidates": len(openai_candidates),
         "dedicated_provider_matches": len(provider),
         "google_exact_matches": len(exact),

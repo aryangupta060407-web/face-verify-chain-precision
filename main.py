@@ -25,6 +25,9 @@ def run_pipeline(image_path: str, tolerance: float = 0.48):
 
     print(f"Google Lens exact matches: {match.get('google_exact_matches', 0)}")
     print(f"Google Lens visual matches: {match.get('google_visual_matches', 0)}")
+    print(f"Context clues extracted: {len(match.get('context_clues', []))}")
+    print(f"Targeted Google candidates: {match.get('targeted_google_candidates', 0)}")
+    print(f"OpenAI web-search candidates: {match.get('openai_web_search_candidates', 0)}")
     print(f"Yandex matches: {match.get('yandex_matches', 0)}")
     print(f"Candidates checked: {match.get('candidates_checked', 0)}")
     print(f"Face-bearing candidates: {match.get('face_bearing_candidates', 0)}")
