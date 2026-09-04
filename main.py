@@ -17,13 +17,12 @@ def run_pipeline(image_path: str, tolerance: float = 0.48):
     print(f"Face detected and encoded. Dimension: {len(encoding)}")
 
     print("\n=== Step 2: Web discovery & face verification ===")
-    print(f"Searching local permitted index plus public Google Lens, X/Instagram/LinkedIn, and Yandex candidates (threshold={tolerance})...")
+    print(f"Searching Google Lens exact matches, visual matches, and Yandex (threshold={tolerance})...")
     match = reverse_image_search(image_path, query_encoding=encoding, tolerance=tolerance)
     if match is None:
         print("No reliable public match found.")
         return None
 
-    print(f"Local index candidates: {match.get('local_index_candidates', 0)}")
     print(f"Google Lens exact matches: {match.get('google_exact_matches', 0)}")
     print(f"Google Lens visual matches: {match.get('google_visual_matches', 0)}")
     print(f"Context clues extracted: {len(match.get('context_clues', []))}")
