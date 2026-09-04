@@ -11,6 +11,7 @@ from urllib.parse import urljoin
 
 from face_id import embeddings_from_bytes
 from openai_discovery import discover as openai_web_discover, extract_context
+from local_index import search_index
 
 load_dotenv()
 SERPAPI_KEY = os.getenv("SERPAPI_KEY")
@@ -198,7 +199,14 @@ def _download(url, referer=None):
 
 
 def _candidate_image(candidate):
-    """Try direct image fields first, then recover social-page preview metadata."""
+    """Try local files, direct image fields, then recover public page metadata."""
+    local_path = candidate.get("local_path")
+    if local_path:
+        try:
+            with open(local_path, "rb") as handle:
+                return handle.read()
+        except OSError:
+            pass
     page_url = candidate.get("link") or ""
     urls = [candidate.get("image"), candidate.get("thumbnail")]
     seen = set()
@@ -258,8 +266,10 @@ def reverse_image_search(image_path: str, query_encoding=None, max_candidates: i
     """Search exact, visual, and Yandex results, then rank verified candidates."""
     if query_encoding is None:
         raise ValueError("Face verification is required; unverified visual results are never returned.")
-    if not SERPAPI_KEY and not (FACE_SEARCH_PROVIDER_URL and FACE_SEARCH_API_KEY) and not os.getenv("OPENAI_API_KEY"):
-        raise RuntimeError("Configure SERPAPI_KEY, OPENAI_API_KEY, or both FACE_SEARCH_PROVIDER_URL and FACE_SEARCH_API_KEY in .env.")
+    local_index_dir = os.getenv("LOCAL_INDEX_DIR", "local_index")
+    local_candidates = search_index(query_encoding, local_index_dir, top_k=max_candidates, threshold=max(tolerance, 0.48))
+    if not SERPAPI_KEY and not (FACE_SEARCH_PROVIDER_URL and FACE_SEARCH_API_KEY) and not os.getenv("OPENAI_API_KEY") and not local_candidates:
+        raise RuntimeError("Configure a search provider or build a local index in LOCAL_INDEX_DIR.")
 
     context_clues = extract_context(image_path)
     for clue in _local_context_clues(image_path):
@@ -284,12 +294,13 @@ def reverse_image_search(image_path: str, query_encoding=None, max_candidates: i
 
     all_candidates = []
     seen = set()
-    for c in openai_candidates + context_candidates + provider + exact + visual + yandex:
+    for c in local_candidates + openai_candidates + context_candidates + provider + exact + visual + yandex:
         key = c.get("link") or c.get("image") or c.get("thumbnail")
         if key and key not in seen:
             seen.add(key)
             all_candidates.append(c)
 
+    print(f"Local index candidates: {len(local_candidates)}")
     print(f"Context clues extracted: {len(context_clues)}")
     print(f"Targeted Google candidates: {len(context_candidates)}")
     print(f"OpenAI web-search candidates: {len(openai_candidates)}")
@@ -333,7 +344,7 @@ def reverse_image_search(image_path: str, query_encoding=None, max_candidates: i
         # Face similarity is authoritative. Source/platform priority only
         # breaks ties and must never make a weaker lookalike outrank a stronger
         # biometric match from another public source.
-        source_priority = 5 if candidate["engine"] == "OpenAI web search" else (4 if candidate["engine"].startswith("Google Search") else (4 if candidate["engine"] == "Dedicated provider" else (3 if candidate["exact_matches"] else (2 if candidate["engine"] == "Google Lens" else 1))))
+        source_priority = 6 if candidate["engine"] == "Local face index" else (5 if candidate["engine"] == "OpenAI web search" else (4 if candidate["engine"].startswith("Google Search") else (4 if candidate["engine"] == "Dedicated provider" else (3 if candidate["exact_matches"] else (2 if candidate["engine"] == "Google Lens" else 1)))))
         candidate["ranking"] = (face_similarity, source_priority, image_match)
         ranked.append(candidate)
 
@@ -350,6 +361,7 @@ def reverse_image_search(image_path: str, query_encoding=None, max_candidates: i
 
     best = accepted[0]
     best.update({
+        "local_index_candidates": len(local_candidates),
         "context_clues": context_clues,
         "targeted_google_candidates": len(context_candidates),
         "openai_web_search_candidates": len(openai_candidates),

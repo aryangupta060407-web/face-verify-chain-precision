@@ -59,6 +59,16 @@ python scripts/deploy_contract.py
 
 Copy the printed contract address into `.env` as `CONTRACT_ADDRESS`.
 
+## Optional local face index
+
+For a reliable consent-based demo, place approved images in a local corpus directory. These may include the subject’s older public profile photo, current photo, and clearly labeled permitted distractor images. The index stores ArcFace embeddings and file metadata locally; it does not crawl social platforms or claim internet-wide coverage.
+
+```bash
+python local_index.py path/to/approved_corpus --index-dir local_index
+```
+
+Set `LOCAL_INDEX_DIR` if the index is stored elsewhere. The normal pipeline automatically searches this local index first, then continues with the public discovery providers. Only candidates that pass the same strict ArcFace verification can reach the blockchain stage.
+
 ## Running the pipeline
 
 Standalone face check:
