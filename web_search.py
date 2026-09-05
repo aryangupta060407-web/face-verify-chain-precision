@@ -58,6 +58,8 @@ def _normalise(item, engine, exact=False):
         "link": _url_value(item.get("link", item.get("url", ""))),
         "thumbnail": _url_value(item.get("thumbnail", "")),
         "image": _url_value(item.get("image", item.get("original", item.get("image_url", "")))),
+        "snippet": str(item.get("snippet", item.get("description", "")) or ""),
+        "displayed_link": str(item.get("displayed_link", "") or ""),
         "engine": engine,
         "exact_matches": bool(exact),
     }
@@ -102,6 +104,16 @@ def _dedicated_provider(image_path: str):
 def _local_context_clues(image_path: str) -> list[str]:
     """Extract non-biometric clues already present in the submitted photo file."""
     clues = []
+    try:
+        import pytesseract
+        with Image.open(image_path) as image:
+            ocr_text = pytesseract.image_to_string(image)
+        for line in re.split(r"[\n|]", ocr_text):
+            text = re.sub(r"[^A-Za-z0-9@._ -]", " ", line).strip()
+            if 3 <= len(text) <= 80 and text not in clues:
+                clues.append(text)
+    except (ImportError, OSError, ValueError):
+        pass
     stem = os.path.splitext(os.path.basename(image_path))[0]
     stem = re.sub(r"[_-]+", " ", stem).strip()
     if stem and not re.fullmatch(r"(?:img|image|photo|dsc|pxl)?\s*\d+", stem, re.I):
@@ -119,16 +131,26 @@ def _local_context_clues(image_path: str) -> list[str]:
     return clues[:8]
 
 
-def _google_context_search(clues: list[str], max_per_query: int = 10):
+def _google_context_search(clues: list[str], max_per_query: int = 5):
+    """Search likely public profile pages using a bounded set of provenance-preserving queries."""
     results = []
-    for clue in clues[:5]:
-        safe_clue = " ".join(str(clue).split())[:120]
-        for site in ("x.com", "instagram.com", "linkedin.com"):
-            response = _serpapi({"engine": "google", "q": f'site:{site} "{safe_clue}"', "num": max_per_query})
-            for item in response.get("organic_results") or []:
-                candidate = _normalise(item, f"Google Search ({site})", False)
-                candidate["context_clue"] = safe_clue
-                results.append(candidate)
+    seen = set()
+    sites = ("x.com", "instagram.com", "linkedin.com", "facebook.com", "pinterest.com")
+    suffixes = ("", "profile")
+    for clue in clues[:2]:
+        safe_clue = " ".join(str(clue).split())[:100]
+        for site in sites:
+            for suffix in suffixes:
+                query = f'site:{site} "{safe_clue}"' + (f" {suffix}" if suffix else "")
+                response = _serpapi({"engine": "google", "q": query, "num": max_per_query})
+                for item in response.get("organic_results") or []:
+                    candidate = _normalise(item, f"Google Search ({site})", False)
+                    candidate["context_clue"] = safe_clue
+                    candidate["search_query"] = query
+                    key = candidate.get("link") or candidate.get("title")
+                    if key and key not in seen:
+                        seen.add(key)
+                        results.append(candidate)
     return results
 
 
@@ -223,7 +245,7 @@ def _candidate_order_key(candidate):
     candidate budget on obvious shopping/catalog pages, but never rejects a
     candidate before the image is checked by ArcFace.
     """
-    text = " ".join(str(candidate.get(field, "") or "") for field in ("title", "source", "link", "context_clue")).lower()
+    text = " ".join(str(candidate.get(field, "") or "") for field in ("title", "source", "link", "snippet", "context_clue")).lower()
     social = _priority_platform(candidate) == 0
     direct_image = bool(_url_value(candidate.get("image")) or _url_value(candidate.get("thumbnail")))
     human_terms = ("profile", "portrait", "person", "people", "face", "photo", "post", "avatar", "creator", "interview", "news", "team", "student")

@@ -37,7 +37,34 @@ def test_profile_candidate_is_ordered_before_product_candidate():
     assert web_search._candidate_order_key(person) > web_search._candidate_order_key(product)
 
 
+def test_targeted_search_expands_public_platforms_and_preserves_provenance():
+    calls = []
+    original_serpapi = web_search._serpapi
+    try:
+        def fake_serpapi(params):
+            calls.append(params)
+            return {"organic_results": [{
+                "title": "Rashmit public profile",
+                "link": "https://instagram.com/rashmit.example",
+                "snippet": "Public profile photo",
+                "displayed_link": "instagram.com/rashmit.example",
+                "image": {"url": "https://img.example/rashmit.jpg"},
+            }]}
+        web_search._serpapi = fake_serpapi
+        results = web_search._google_context_search(["rashmit"], max_per_query=2)
+    finally:
+        web_search._serpapi = original_serpapi
+    assert len(calls) == 10
+    assert {"x.com", "instagram.com", "linkedin.com", "facebook.com", "pinterest.com"} == {
+        query["q"].split("site:", 1)[1].split()[0] for query in calls
+    }
+    assert results[0]["snippet"] == "Public profile photo"
+    assert results[0]["search_query"] == calls[0]["q"]
+    assert results[0]["image"] == "https://img.example/rashmit.jpg"
+
+
 if __name__ == "__main__":
     test_nested_provider_fields_are_normalized_and_downloadable()
     test_profile_candidate_is_ordered_before_product_candidate()
+    test_targeted_search_expands_public_platforms_and_preserves_provenance()
     print("web search regression tests: PASS")
