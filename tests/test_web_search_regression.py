@@ -63,8 +63,66 @@ def test_targeted_search_expands_public_platforms_and_preserves_provenance():
     assert results[0]["image"] == "https://img.example/rashmit.jpg"
 
 
+def test_google_lens_parser_captures_documented_and_variant_sections():
+    fixture = {
+        "exact_matches": [{
+            "title": "Exact public photo",
+            "link": "https://example.com/exact",
+            "source": "Example",
+            "thumbnail": "https://img.example/exact-thumb.jpg",
+            "image": "https://img.example/exact.jpg",
+        }],
+        "image_sources": [{
+            "title": "Older source page",
+            "link": "https://example.com/source",
+            "source": "Example Archive",
+            "thumbnail": "https://img.example/source-thumb.jpg",
+        }],
+        "visual_results": [{
+            "title": "Variant visual result",
+            "link": "https://example.com/visual",
+            "source": "Example Visual",
+            "thumbnail": "https://img.example/visual-thumb.jpg",
+            "image": "https://img.example/visual.jpg",
+        }],
+    }
+    exact = web_search._lens_records(fixture, "exact_matches", "exact_results", "image_sources")
+    visual = web_search._lens_records(fixture, "visual_matches", "visual_results")
+    assert len(exact) == 2
+    assert len(visual) == 1
+    normalized = [web_search._normalise(item, "Google Lens", True) for item in exact]
+    assert [item["link"] for item in normalized] == [
+        "https://example.com/exact",
+        "https://example.com/source",
+    ]
+    assert normalized[0]["image"] == "https://img.example/exact.jpg"
+
+
+def test_google_lens_uses_explicit_types_and_native_image_id():
+    original_serpapi = web_search._serpapi
+    calls = []
+    try:
+        def fake_serpapi(params):
+            calls.append(params)
+            if params["type"] == "exact_matches":
+                return {"exact_matches": [{"title": "exact", "link": "https://example.com/e"}]}
+            return {"visual_matches": [{"title": "visual", "link": "https://example.com/v"}]}
+        web_search._serpapi = fake_serpapi
+        exact, visual = web_search._google_lens("native-image-id", use_image_id=True)
+    finally:
+        web_search._serpapi = original_serpapi
+    assert len(exact) == 1
+    assert len(visual) == 1
+    assert calls == [
+        {"engine": "google_lens", "image_id": "native-image-id", "type": "exact_matches"},
+        {"engine": "google_lens", "image_id": "native-image-id", "type": "visual_matches"},
+    ]
+
+
 if __name__ == "__main__":
     test_nested_provider_fields_are_normalized_and_downloadable()
     test_profile_candidate_is_ordered_before_product_candidate()
     test_targeted_search_expands_public_platforms_and_preserves_provenance()
+    test_google_lens_parser_captures_documented_and_variant_sections()
+    test_google_lens_uses_explicit_types_and_native_image_id()
     print("web search regression tests: PASS")

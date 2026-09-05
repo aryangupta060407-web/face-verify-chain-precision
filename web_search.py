@@ -29,6 +29,23 @@ def upload_temp_image(image_path: str) -> str:
     return url
 
 
+def upload_lens_image_id(image_path: str) -> str:
+    """Use SerpApi's native image upload when available, avoiding third-party URL rewriting."""
+    with open(image_path, "rb") as image_file:
+        response = requests.post(
+            "https://serpapi.com/image",
+            data={"api_key": SERPAPI_KEY},
+            files={"image": (os.path.basename(image_path), image_file, "application/octet-stream")},
+            timeout=45,
+        )
+    response.raise_for_status()
+    payload = response.json()
+    image_id = payload.get("image_id")
+    if not image_id:
+        raise RuntimeError(payload.get("error", "SerpApi image upload did not return image_id"))
+    return str(image_id)
+
+
 def _serpapi(params):
     try:
         from serpapi import GoogleSearch
@@ -65,11 +82,27 @@ def _normalise(item, engine, exact=False):
     }
 
 
-def _google_lens(image_url):
-    exact_response = _serpapi({"engine": "google_lens", "type": "exact_matches", "url": image_url})
-    visual_response = _serpapi({"engine": "google_lens", "url": image_url})
-    exact = [_normalise(x, "Google Lens", True) for x in (exact_response.get("exact_matches") or [])]
-    visual = [_normalise(x, "Google Lens", False) for x in (visual_response.get("visual_matches") or [])]
+def _lens_records(response, *keys):
+    """Read Lens result arrays across SerpApi JSON layout variants."""
+    records = []
+    for key in keys:
+        value = response.get(key) or []
+        if isinstance(value, dict):
+            value = value.get("results") or value.get("items") or value.get("matches") or []
+        if isinstance(value, list):
+            records.extend(item for item in value if isinstance(item, dict))
+    return records
+
+
+def _google_lens(image_ref, use_image_id=False):
+    request_base = {"engine": "google_lens"}
+    request_base["image_id" if use_image_id else "url"] = image_ref
+    exact_response = _serpapi({**request_base, "type": "exact_matches"})
+    visual_response = _serpapi({**request_base, "type": "visual_matches"})
+    exact_raw = _lens_records(exact_response, "exact_matches", "exact_results", "image_sources")
+    visual_raw = _lens_records(visual_response, "visual_matches", "visual_results")
+    exact = [_normalise(x, "Google Lens", True) for x in exact_raw]
+    visual = [_normalise(x, "Google Lens", False) for x in visual_raw]
     return exact, visual
 
 
@@ -316,8 +349,17 @@ def reverse_image_search(image_path: str, query_encoding=None, max_candidates: i
                 context_candidates = _google_context_search(context_clues)
             except Exception as exc:
                 print(f"  [warn] Context Google search failed: {exc}")
-        image_url = upload_temp_image(image_path)
-        exact, visual = _google_lens(image_url)
+        image_url = None
+        try:
+            image_id = upload_lens_image_id(image_path)
+            exact, visual = _google_lens(image_id, use_image_id=True)
+        except Exception as native_upload_error:
+            print(f"  [warn] Native Lens upload failed; using public URL fallback: {native_upload_error}")
+            image_url = upload_temp_image(image_path)
+            exact, visual = _google_lens(image_url)
+        if image_url is None:
+            # Preserve the existing Yandex input path; only Lens uses image_id.
+            image_url = upload_temp_image(image_path)
         try:
             yandex = _yandex(image_url)
         except Exception as exc:
