@@ -199,8 +199,8 @@ def _download(url, referer=None):
 
 def _candidate_image(candidate):
     """Try direct image fields first, then recover social-page preview metadata."""
-    page_url = candidate.get("link") or ""
-    urls = [candidate.get("image"), candidate.get("thumbnail")]
+    page_url = _url_value(candidate.get("link"))
+    urls = [_url_value(candidate.get("image")), _url_value(candidate.get("thumbnail"))]
     seen = set()
     for url in urls:
         if not url or url in seen:
@@ -213,6 +213,25 @@ def _candidate_image(candidate):
     if page_image and page_image not in seen:
         return _download(page_image, referer=page_url)
     return None
+
+
+def _candidate_order_key(candidate):
+    """Order mixed provider results for verification without changing acceptance rules.
+
+    This is deliberately a soft ordering heuristic. It uses provider metadata,
+    direct-image availability, and page context to avoid spending the finite
+    candidate budget on obvious shopping/catalog pages, but never rejects a
+    candidate before the image is checked by ArcFace.
+    """
+    text = " ".join(str(candidate.get(field, "") or "") for field in ("title", "source", "link", "context_clue")).lower()
+    social = _priority_platform(candidate) == 0
+    direct_image = bool(_url_value(candidate.get("image")) or _url_value(candidate.get("thumbnail")))
+    human_terms = ("profile", "portrait", "person", "people", "face", "photo", "post", "avatar", "creator", "interview", "news", "team", "student")
+    product_terms = ("product", "shop", "store", "buy", "price", "catalog", "clothing", "apparel", "fashion", "shoes", "dress", "collection")
+    human_context = sum(term in text for term in human_terms)
+    product_context = sum(term in text for term in product_terms)
+    exact = bool(candidate.get("exact_matches"))
+    return (social, exact, direct_image, human_context, -product_context)
 
 
 def _phash(data):
@@ -285,7 +304,7 @@ def reverse_image_search(image_path: str, query_encoding=None, max_candidates: i
     all_candidates = []
     seen = set()
     for c in openai_candidates + context_candidates + provider + exact + visual + yandex:
-        key = c.get("link") or c.get("image") or c.get("thumbnail")
+        key = _url_value(c.get("link")) or _url_value(c.get("image")) or _url_value(c.get("thumbnail"))
         if key and key not in seen:
             seen.add(key)
             all_candidates.append(c)
@@ -299,7 +318,7 @@ def reverse_image_search(image_path: str, query_encoding=None, max_candidates: i
     print(f"Yandex matches: {len(yandex)}")
     # Search providers return mixed results. Check public social-platform pages
     # first, while retaining exact-match priority within each group.
-    all_candidates.sort(key=lambda c: (_priority_platform(c), 0 if c.get("exact_matches") else 1))
+    all_candidates.sort(key=_candidate_order_key, reverse=True)
     print(f"Priority social candidates: {sum(_priority_platform(c) == 0 for c in all_candidates)}")
     print(f"Unique candidates discovered: {len(all_candidates)}")
     query_data = open(image_path, "rb").read()
